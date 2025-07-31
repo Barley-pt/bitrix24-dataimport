@@ -70,7 +70,6 @@ def mapping_window(columns, b24_fields, title):
     canvas.bind_all("<MouseWheel>", _on_mousewheel)
     canvas.bind_all("<Button-4>", lambda event: canvas.yview_scroll(-1, "units"))
     canvas.bind_all("<Button-5>", lambda event: canvas.yview_scroll(1, "units"))
-    # --- THE KEY FIX ---
     window.grab_set()
     window.wait_window()
     return mapping
@@ -169,10 +168,19 @@ def main():
     possible_dedupe_keys = [c for c in contact_mapping.keys()]
     dedupe_field = simpledialog.askstring(
         "Deduplication",
-        f"Which Excel column should be used for deduplication when importing contacts?\n\nOptions: {', '.join(possible_dedupe_keys)}\n\n(e.g., Email, Phone, Name)"
+        f"Which Excel column should be used for deduplication when importing contacts?\n\nOptions: {', '.join(possible_dedupe_keys)}\n\n(e.g., Email, Phone, Name)\n\n(If left blank, will use 'Email' if available.)"
     )
+
     if not dedupe_field or dedupe_field not in contact_mapping:
-        sys.exit("No valid deduplication field selected.")
+        # Try default to "Email" (case-insensitive)
+        email_candidates = [c for c in contact_mapping.keys() if c.lower() == "email"]
+        if email_candidates:
+            dedupe_field = email_candidates[0]
+            print(f"No valid deduplication field selected. Defaulting to: {dedupe_field}")
+        else:
+            print("No valid deduplication field selected, and no 'Email' column mapped. Exiting.")
+            sys.exit("No valid deduplication field selected.")
+
 
     # 7. Choose which DEAL field should be filled with the Bitrix24 Contact ID (usually CONTACT_ID)
     possible_deal_contact_fields = [k for k, v in deal_fields.items() if v.get('type', '').lower() == 'crm_contact' or v.get('title', '').upper().find('CONTACT') >= 0]
