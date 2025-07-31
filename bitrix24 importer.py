@@ -86,6 +86,22 @@ def fetch_pipelines(webhook):
     resp.raise_for_status()
     return resp.json()["result"]
 
+def sanitize_payload(data):
+    """Recursively convert pandas Timestamps and other non-serializable objects to strings."""
+    import pandas as pd
+    import datetime
+    sanitized = {}
+    for k, v in data.items():
+        if isinstance(v, pd.Timestamp):
+            sanitized[k] = v.strftime("%Y-%m-%d")  # Or use .isoformat()
+        elif isinstance(v, (datetime.date, datetime.datetime)):
+            sanitized[k] = v.isoformat()
+        elif pd.isnull(v):
+            continue  # skip NaN/None
+        else:
+            sanitized[k] = v
+    return sanitized
+
 # --- Deduplication logic: find existing contact ---
 def find_existing_contact(webhook, dedupe_field, value):
     if not value:
@@ -196,7 +212,8 @@ def main():
     # 8. Import loop
     for idx, row in df.iterrows():
         # Prepare contact data
-        contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
+        raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
+        contact_data = sanitize_payload(raw_contact_data)
         dedupe_value = row[dedupe_field]
         print(f"\n[{idx+1}/{len(df)}] Processing contact: {dedupe_field}='{dedupe_value}'...")
         contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field], dedupe_value)
@@ -212,7 +229,8 @@ def main():
             print(f"  Found existing contact ID: {contact_id}")
 
         # Prepare deal data
-        deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
+        raw_deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
+        deal_data = sanitize_payload(raw_deal_data)
         deal_data["CATEGORY_ID"] = pipeline_id
         deal_data[deal_contact_field_choice] = contact_id
         print(f"  Importing deal with linked contact ID {contact_id}...")
