@@ -57,8 +57,17 @@ def column_mapping(columns, b24_fields, title):
     dropdowns = []
 
     # Sort Bitrix fields alphabetically by title
-    b24_choices = [""] + [f"{fid}: {fdata['title']}" for fid, fdata in sorted(b24_fields.items(), key=lambda x: x[1]['title'].lower())]
-    b24_ids = [""] + list(sorted(b24_fields.keys(), key=lambda k: b24_fields[k]['title'].lower()))
+    def field_label(fid, fdata):
+    # Show "Title (ID)" for user fields, just Title for system fields
+    title = fdata.get('title', fid)
+    if fid.startswith("UF_CRM"):
+        return f"{title} ({fid})"
+    else:
+        return title
+
+    b24_choices = [""] + [field_label(fid, fdata) for fid, fdata in sorted(b24_fields.items(), key=lambda x: x[1]['title'].lower())]
+    b24_id_map = {field_label(fid, fdata): fid for fid, fdata in b24_fields.items()}
+
 
     # Header
     tk.Label(frame, text="Excel Column", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5)
@@ -74,17 +83,12 @@ def column_mapping(columns, b24_fields, title):
         dropdowns.append(dropdown)
 
     def submit():
-        for i, col in enumerate(columns):
-            selected = dropdown_vars[i].get()
-            if selected:
-                try:
-                    # Extract field ID from "id: title"
-                    fid = selected.split(":")[0]
-                    if fid in b24_fields:
-                        mapping[col] = fid
-                except Exception:
-                    continue
-        root.destroy()
+    for i, col in enumerate(columns):
+        selected = dropdown_vars[i].get()
+        fid = b24_id_map.get(selected)
+        if fid:
+            mapping[col] = fid
+    root.destroy()
 
     submit_btn = tk.Button(frame, text="Submit", command=submit)
     submit_btn.grid(row=len(columns) + 2, column=0, columnspan=2, pady=20)
