@@ -4,6 +4,14 @@ import requests
 import pandas as pd
 import os
 import sys
+import csv
+log_filename = "bitrix24_import_log.csv"
+logfile = open(log_filename, mode="w", newline='', encoding="utf-8")
+logwriter = csv.writer(logfile)
+logwriter.writerow([
+    "Row", "Contact_Dedup_Value", "Contact_Payload", "Contact_ID", "Contact_Result",
+    "Deal_Payload", "Deal_ID", "Deal_Result"
+])
 
 # --- Helper for pretty Bitrix24 field labels ---
 def field_label(fid, fdata):
@@ -211,36 +219,48 @@ def main():
 
     # 8. Import loop
     for idx, row in df.iterrows():
-        # Prepare contact data
-        raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
-        contact_data = sanitize_payload(raw_contact_data)
-        dedupe_value = row[dedupe_field]
-        print(f"\n[{idx+1}/{len(df)}] Processing contact: {dedupe_field}='{dedupe_value}'...")
+    # Prepare contact data
+    raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
+    contact_data = sanitize_payload(raw_contact_data)
+    dedupe_value = row[dedupe_field]
+    contact_id, contact_result = None, ""
+    try:
         contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field], dedupe_value)
         if not contact_id:
-            print(f"  Not found, creating new contact...")
             contact_id = create_contact(webhook, contact_data)
-            if contact_id:
-                print(f"  Created contact with ID {contact_id}")
-            else:
-                print(f"  Failed to create contact, skipping row.")
-                continue
+            contact_result = f"Created: {contact_id}" if contact_id else "Create failed"
         else:
-            print(f"  Found existing contact ID: {contact_id}")
+            contact_result = f"Found: {contact_id}"
+    except Exception as e:
+        contact_result = f"Error: {e}"
+        contact_id = None
 
-        # Prepare deal data
-        raw_deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
-        deal_data = sanitize_payload(raw_deal_data)
-        deal_data["CATEGORY_ID"] = pipeline_id
-        deal_data[deal_contact_field_choice] = contact_id
-        print(f"  Importing deal with linked contact ID {contact_id}...")
-        deal_id = create_deal(webhook, deal_data)
-        if deal_id:
-            print(f"  Created deal with ID {deal_id}")
+    # Prepare deal data
+    raw_deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
+    deal_data = sanitize_payload(raw_deal_data)
+    deal_data["CATEGORY_ID"] = pipeline_id
+    deal_data[deal_contact_field_choice] = contact_id
+    deal_id, deal_result = None, ""
+    try:
+        if contact_id:
+            deal_id = create_deal(webhook, deal_data)
+            deal_result = f"Created: {deal_id}" if deal_id else "Create failed"
         else:
-            print(f"  Failed to create deal for contact {contact_id}")
+            deal_result = "No contact, not created"
+    except Exception as e:
+        deal_result = f"Error: {e}"
+        deal_id = None
+
+    # Write to log
+    logwriter.writerow([
+        idx+1, dedupe_value,
+        repr(contact_data), contact_id, contact_result,
+        repr(deal_data), deal_id, deal_result
+    ])
 
     messagebox.showinfo("Done", "Import completed.")
 
 if __name__ == "__main__":
     main()
+    logfile.close()
+    print(f"\nLog written to: {log_filename}")
