@@ -70,9 +70,11 @@ def mapping_window(columns, b24_fields, title):
     canvas.bind_all("<MouseWheel>", _on_mousewheel)
     canvas.bind_all("<Button-4>", lambda event: canvas.yview_scroll(-1, "units"))
     canvas.bind_all("<Button-5>", lambda event: canvas.yview_scroll(1, "units"))
+    # --- THE KEY FIX ---
     window.grab_set()
     window.wait_window()
     return mapping
+
 
 # --- Fetch fields/pipelines from Bitrix24 ---
 def fetch_fields(webhook, entity):
