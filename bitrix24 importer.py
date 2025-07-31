@@ -157,11 +157,11 @@ def main():
     print(f"Loaded file with columns: {columns}")
 
     # 4. Map columns to contact fields
-    messagebox.showinfo("Mapping", "Now map Excel columns to Bitrix24 **Contact** fields.")
+    messagebox.showinfo("Mapping", "Now map Excel columns to Bitrix24 **CONTACT** fields.")
     contact_mapping = mapping_window(columns, contact_fields, "Map Contact Fields")
 
     # 5. Map columns to deal fields
-    messagebox.showinfo("Mapping", "Now map Excel columns to Bitrix24 **Deal** fields.")
+    messagebox.showinfo("Mapping", "Now map Excel columns to Bitrix24 **DEAL** fields.")
     deal_mapping = mapping_window(columns, deal_fields, "Map Deal Fields")
 
     # 6. Choose deduplication field
