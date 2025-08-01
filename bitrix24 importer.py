@@ -220,10 +220,10 @@ def main():
     # 8. Import loop
     for idx, row in df.iterrows():
     # Prepare contact data
-    raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
-    contact_data = sanitize_payload(raw_contact_data)
-    dedupe_value = row[dedupe_field]
-    contact_id, contact_result = None, ""
+        raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
+        contact_data = sanitize_payload(raw_contact_data)
+        dedupe_value = row[dedupe_field]
+        contact_id, contact_result = None, ""
     try:
         contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field], dedupe_value)
         if not contact_id:
