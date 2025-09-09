@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import sys
 import csv
+
 log_filename = "bitrix24_import_log.csv"
 logfile = open(log_filename, mode="w", newline='', encoding="utf-8")
 logwriter = csv.writer(logfile)
@@ -38,7 +39,7 @@ def field_label(fid, fdata):
             pass
     return label
 
-# --- GUI Mapping Window with Scroll ---
+# --- GUI Mapping Window with Multi-field Type Selection ---
 def mapping_window(columns, b24_fields, title):
     import re
     mapping = {}
@@ -144,7 +145,42 @@ def mapping_window(columns, b24_fields, title):
     window.wait_window()
     return mapping
 
+# --- Build payloads supporting multi-fields for Bitrix24 ---
+def build_multifield_payload(row, mapping):
+    """
+    Build Bitrix24 contact/deal payload from mapping:
+    mapping: {Excel column: (Bitrix24 field, value_type or None)}
+    Returns: dict ready to send to Bitrix24 API.
+    """
+    from collections import defaultdict
+    import pandas as pd
+    import datetime
 
+    multifields = {"PHONE", "EMAIL", "IM"}
+    multifield_payloads = defaultdict(list)
+    simple_payload = {}
+    for excel_col, (fid, vtype) in mapping.items():
+        value = row[excel_col]
+        if pd.isnull(value) or value == '':
+            continue
+        # Dates/timestamps to string
+        if isinstance(value, pd.Timestamp):
+            value = value.strftime("%Y-%m-%d")
+        elif isinstance(value, (datetime.date, datetime.datetime)):
+            value = value.isoformat()
+
+        # Multi-field logic
+        if fid in multifields and vtype:
+            # Accept split values by , ; or |
+            vals = [v.strip() for v in str(value).replace(";",",").replace("|",",").split(",") if v.strip()]
+            for val in vals:
+                multifield_payloads[fid].append({"VALUE": val, "VALUE_TYPE": vtype})
+        else:
+            simple_payload[fid] = value
+    # Merge
+    payload = simple_payload.copy()
+    payload.update(multifield_payloads)
+    return payload
 
 # --- Fetch fields/pipelines from Bitrix24 ---
 def fetch_fields(webhook, entity):
@@ -156,38 +192,6 @@ def fetch_pipelines(webhook):
     resp = requests.get(f"{webhook}crm.dealcategory.list.json")
     resp.raise_for_status()
     return resp.json()["result"]
-
-def sanitize_payload(data):
-    """Recursively convert pandas Timestamps and other non-serializable objects to strings."""
-    import pandas as pd
-    import datetime
-    sanitized = {}
-    for k, v in data.items():
-        if isinstance(v, pd.Timestamp):
-            sanitized[k] = v.strftime("%Y-%m-%d")  # Or use .isoformat()
-        elif isinstance(v, (datetime.date, datetime.datetime)):
-            sanitized[k] = v.isoformat()
-        elif pd.isnull(v):
-            continue  # skip NaN/None
-        else:
-            sanitized[k] = v
-    return sanitized
-    def fix_multifields(payload, multifield_keys=["PHONE", "EMAIL"], default_type="WORK"):
-    """Convert string values for PHONE/EMAIL to Bitrix24 format."""
-    new_payload = payload.copy()
-    for key in multifield_keys:
-        if key in payload and payload[key]:
-            val = payload[key]
-            if not isinstance(val, list):
-                # Accept comma, semicolon, or pipe separated
-                vals = [v.strip() for v in str(val).replace(";",",").replace("|",",").split(",") if v.strip()]
-            else:
-                vals = val
-            new_payload[key] = [
-                {"VALUE": v, "VALUE_TYPE": default_type}
-                for v in vals if v
-            ]
-    return new_payload
 
 # --- Deduplication logic: find existing contact ---
 def find_existing_contact(webhook, dedupe_field, value):
@@ -284,7 +288,6 @@ def main():
             print("No valid deduplication field selected, and no 'Email' column mapped. Exiting.")
             sys.exit("No valid deduplication field selected.")
 
-
     # 7. Choose which DEAL field should be filled with the Bitrix24 Contact ID (usually CONTACT_ID)
     possible_deal_contact_fields = [k for k, v in deal_fields.items() if v.get('type', '').lower() == 'crm_contact' or v.get('title', '').upper().find('CONTACT') >= 0]
     deal_contact_field_choice = simpledialog.askstring(
@@ -298,46 +301,42 @@ def main():
 
     # 8. Import loop
     for idx, row in df.iterrows():
-    # Prepare contact data
-        raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
-        contact_data = sanitize_payload(raw_contact_data)
-        contact_data = fix_multifields(contact_data)
+        # Prepare contact data
+        contact_data = build_multifield_payload(row, contact_mapping)
         dedupe_value = row[dedupe_field]
         contact_id, contact_result = None, ""
-    try:
-        contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field], dedupe_value)
-        if not contact_id:
-            contact_id = create_contact(webhook, contact_data)
-            contact_result = f"Created: {contact_id}" if contact_id else "Create failed"
-        else:
-            contact_result = f"Found: {contact_id}"
-    except Exception as e:
-        contact_result = f"Error: {e}"
-        contact_id = None
+        try:
+            contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field][0], dedupe_value)
+            if not contact_id:
+                contact_id = create_contact(webhook, contact_data)
+                contact_result = f"Created: {contact_id}" if contact_id else "Create failed"
+            else:
+                contact_result = f"Found: {contact_id}"
+        except Exception as e:
+            contact_result = f"Error: {e}"
+            contact_id = None
 
-    # Prepare deal data
-    raw_deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
-    deal_data = sanitize_payload(raw_deal_data)
-    deal_data = fix_multifields(deal_data)
-    deal_data["CATEGORY_ID"] = pipeline_id
-    deal_data[deal_contact_field_choice] = contact_id
-    deal_id, deal_result = None, ""
-    try:
-        if contact_id:
-            deal_id = create_deal(webhook, deal_data)
-            deal_result = f"Created: {deal_id}" if deal_id else "Create failed"
-        else:
-            deal_result = "No contact, not created"
-    except Exception as e:
-        deal_result = f"Error: {e}"
-        deal_id = None
+        # Prepare deal data
+        deal_data = build_multifield_payload(row, deal_mapping)
+        deal_data["CATEGORY_ID"] = pipeline_id
+        deal_data[deal_contact_field_choice] = contact_id
+        deal_id, deal_result = None, ""
+        try:
+            if contact_id:
+                deal_id = create_deal(webhook, deal_data)
+                deal_result = f"Created: {deal_id}" if deal_id else "Create failed"
+            else:
+                deal_result = "No contact, not created"
+        except Exception as e:
+            deal_result = f"Error: {e}"
+            deal_id = None
 
-    # Write to log
-    logwriter.writerow([
-        idx+1, dedupe_value,
-        repr(contact_data), contact_id, contact_result,
-        repr(deal_data), deal_id, deal_result
-    ])
+        # Write to log
+        logwriter.writerow([
+            idx+1, dedupe_value,
+            repr(contact_data), contact_id, contact_result,
+            repr(deal_data), deal_id, deal_result
+        ])
 
     messagebox.showinfo("Done", "Import completed.")
 
