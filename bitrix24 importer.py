@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, simpledialog, messagebox, ttk
+from collections import defaultdict
 import requests
 import pandas as pd
 import os
@@ -39,11 +40,12 @@ def field_label(fid, fdata):
 
 # --- GUI Mapping Window with Scroll ---
 def mapping_window(columns, b24_fields, title):
+    import re
     mapping = {}
     window = tk.Toplevel()
     window.title(title)
-    window.geometry("700x500")
-    window.minsize(400, 300)
+    window.geometry("900x500")
+    window.minsize(600, 300)
     window.resizable(True, True)
     canvas = tk.Canvas(window)
     canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
@@ -53,26 +55,86 @@ def mapping_window(columns, b24_fields, title):
     canvas.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
     frame = tk.Frame(canvas)
     canvas.create_window((0, 0), window=frame, anchor="nw")
-    dropdown_vars = []
+
+    # Prepare Bitrix24 field choices and map for value types
     b24_choices = [""] + [field_label(fid, fdata) for fid, fdata in sorted(b24_fields.items(), key=lambda x: field_label(x[0], x[1]).lower())]
     b24_id_map = {field_label(fid, fdata): fid for fid, fdata in b24_fields.items()}
+    multifields = {"PHONE", "EMAIL", "IM"}  # can add more if needed
+
+    # Common Bitrix24 types (add more if needed)
+    value_types = {
+        "PHONE": ["WORK", "MOBILE", "HOME", "FAX", "OTHER"],
+        "EMAIL": ["WORK", "HOME", "OTHER"],
+        "IM": ["SKYPE", "ICQ", "MSN", "JABBER", "OTHER"],
+    }
+
     tk.Label(frame, text="Excel Column", font=("Arial", 12, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5)
     tk.Label(frame, text="Bitrix24 Field", font=("Arial", 12, "bold")).grid(row=0, column=1, sticky="w", padx=5, pady=5)
+    tk.Label(frame, text="Value Type", font=("Arial", 12, "bold")).grid(row=0, column=2, sticky="w", padx=5, pady=5)
+
+    dropdown_vars = []
+    type_vars = []
+    type_boxes = []
+
     for i, col in enumerate(columns):
         tk.Label(frame, text=col, anchor="w").grid(row=i+1, column=0, sticky="w", padx=5, pady=3)
-        var = tk.StringVar()
-        dropdown = ttk.Combobox(frame, textvariable=var, values=b24_choices, state="readonly", width=60)
+        field_var = tk.StringVar()
+        type_var = tk.StringVar()
+        dropdown = ttk.Combobox(frame, textvariable=field_var, values=b24_choices, state="readonly", width=55)
         dropdown.grid(row=i+1, column=1, sticky="w", padx=5, pady=3)
-        dropdown_vars.append(var)
+        type_box = ttk.Combobox(frame, textvariable=type_var, values=[], state="readonly", width=14)
+        type_box.grid(row=i+1, column=2, sticky="w", padx=5, pady=3)
+        dropdown_vars.append(field_var)
+        type_vars.append(type_var)
+        type_boxes.append(type_box)
+
+        # When the Bitrix24 field is changed, show types if needed
+        def on_field_select(event, idx=i):
+            field = dropdown_vars[idx].get()
+            fid = b24_id_map.get(field)
+            type_box = type_boxes[idx]
+            show_types = False
+            if fid and fid.upper() in multifields:
+                show_types = True
+            if show_types:
+                type_box["values"] = value_types.get(fid.upper(), ["WORK", "HOME", "OTHER"])
+                # Try to auto-select based on Excel col name (e.g., if col contains "mobile")
+                col_lower = columns[idx].lower()
+                auto_type = ""
+                if "mobile" in col_lower:
+                    auto_type = "MOBILE"
+                elif "work" in col_lower:
+                    auto_type = "WORK"
+                elif "home" in col_lower:
+                    auto_type = "HOME"
+                elif "fax" in col_lower:
+                    auto_type = "FAX"
+                elif "skype" in col_lower:
+                    auto_type = "SKYPE"
+                if auto_type and auto_type in type_box["values"]:
+                    type_vars[idx].set(auto_type)
+                else:
+                    type_vars[idx].set(type_box["values"][0])
+                type_box["state"] = "readonly"
+            else:
+                type_box.set("")
+                type_box["values"] = []
+                type_box["state"] = "disabled"
+        dropdown.bind("<<ComboboxSelected>>", on_field_select)
+        type_box["state"] = "disabled"
+
     def submit():
         for i, col in enumerate(columns):
-            selected = dropdown_vars[i].get()
-            fid = b24_id_map.get(selected)
+            selected_field = dropdown_vars[i].get()
+            selected_type = type_vars[i].get()
+            fid = b24_id_map.get(selected_field)
+            # If type is set, return as tuple; else None for value type
             if fid:
-                mapping[col] = fid
+                mapping[col] = (fid, selected_type if selected_type else None)
         window.destroy()
     submit_btn = tk.Button(frame, text="Submit", command=submit)
-    submit_btn.grid(row=len(columns) + 2, column=0, columnspan=2, pady=20)
+    submit_btn.grid(row=len(columns) + 2, column=0, columnspan=3, pady=20)
+
     def _on_mousewheel(event):
         canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
     canvas.bind_all("<MouseWheel>", _on_mousewheel)
@@ -81,6 +143,7 @@ def mapping_window(columns, b24_fields, title):
     window.grab_set()
     window.wait_window()
     return mapping
+
 
 
 # --- Fetch fields/pipelines from Bitrix24 ---
@@ -109,6 +172,22 @@ def sanitize_payload(data):
         else:
             sanitized[k] = v
     return sanitized
+    def fix_multifields(payload, multifield_keys=["PHONE", "EMAIL"], default_type="WORK"):
+    """Convert string values for PHONE/EMAIL to Bitrix24 format."""
+    new_payload = payload.copy()
+    for key in multifield_keys:
+        if key in payload and payload[key]:
+            val = payload[key]
+            if not isinstance(val, list):
+                # Accept comma, semicolon, or pipe separated
+                vals = [v.strip() for v in str(val).replace(";",",").replace("|",",").split(",") if v.strip()]
+            else:
+                vals = val
+            new_payload[key] = [
+                {"VALUE": v, "VALUE_TYPE": default_type}
+                for v in vals if v
+            ]
+    return new_payload
 
 # --- Deduplication logic: find existing contact ---
 def find_existing_contact(webhook, dedupe_field, value):
@@ -222,6 +301,7 @@ def main():
     # Prepare contact data
         raw_contact_data = {contact_mapping[excel_col]: row[excel_col] for excel_col in contact_mapping if pd.notnull(row[excel_col])}
         contact_data = sanitize_payload(raw_contact_data)
+        contact_data = fix_multifields(contact_data)
         dedupe_value = row[dedupe_field]
         contact_id, contact_result = None, ""
     try:
@@ -238,6 +318,7 @@ def main():
     # Prepare deal data
     raw_deal_data = {deal_mapping[excel_col]: row[excel_col] for excel_col in deal_mapping if pd.notnull(row[excel_col])}
     deal_data = sanitize_payload(raw_deal_data)
+    deal_data = fix_multifields(deal_data)
     deal_data["CATEGORY_ID"] = pipeline_id
     deal_data[deal_contact_field_choice] = contact_id
     deal_id, deal_result = None, ""
