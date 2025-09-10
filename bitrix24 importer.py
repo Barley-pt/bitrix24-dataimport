@@ -238,7 +238,7 @@ def main():
     # 1. Get webhook URL
     root = tk.Tk()
     root.withdraw()
-    webhook = simpledialog.askstring("Webhook", "Enter your Bitrix24 Webhook URL (should end with /rest/):")
+    webhook = simpledialog.askstring("Webhook", "Enter your Bitrix24 Webhook URL:")
     if not webhook: sys.exit("No webhook provided.")
     if not webhook.endswith('/'): webhook += '/'
 
@@ -300,36 +300,55 @@ def main():
     print(f"\nStarting import: deduplication on contact field '{dedupe_field}' and deal field '{deal_contact_field_choice}' for contact link.")
 
     # 8. Import loop
+    import time
+
     for idx, row in df.iterrows():
+        print(f"\n[{idx+1}/{len(df)}] Importing row...")
+
         # Prepare contact data
         contact_data = build_multifield_payload(row, contact_mapping)
+        print("  Contact payload:")
+        for k, v in contact_data.items():
+            print(f"    {k}: {v}")
+
         dedupe_value = row[dedupe_field]
         contact_id, contact_result = None, ""
         try:
             contact_id = find_existing_contact(webhook, contact_mapping[dedupe_field][0], dedupe_value)
+            time.sleep(0.5)  # Bitrix24 rate limit
             if not contact_id:
                 contact_id = create_contact(webhook, contact_data)
                 contact_result = f"Created: {contact_id}" if contact_id else "Create failed"
+                print(f"  ➔ Contact {contact_result}")
             else:
                 contact_result = f"Found: {contact_id}"
+                print(f"  ➔ Existing contact found: {contact_id}")
         except Exception as e:
             contact_result = f"Error: {e}"
             contact_id = None
+            print(f"  ➔ Error searching/creating contact: {e}")
 
         # Prepare deal data
         deal_data = build_multifield_payload(row, deal_mapping)
         deal_data["CATEGORY_ID"] = pipeline_id
         deal_data[deal_contact_field_choice] = contact_id
+        print("  Deal payload:")
+        for k, v in deal_data.items():
+            print(f"    {k}: {v}")
         deal_id, deal_result = None, ""
         try:
             if contact_id:
                 deal_id = create_deal(webhook, deal_data)
+                time.sleep(0.5)  # Bitrix24 rate limit
                 deal_result = f"Created: {deal_id}" if deal_id else "Create failed"
+                print(f"  ➔ Deal {deal_result}")
             else:
                 deal_result = "No contact, not created"
+                print(f"  ➔ Deal not created (no contact)")
         except Exception as e:
             deal_result = f"Error: {e}"
             deal_id = None
+            print(f"  ➔ Error creating deal: {e}")
 
         # Write to log
         logwriter.writerow([
@@ -337,6 +356,8 @@ def main():
             repr(contact_data), contact_id, contact_result,
             repr(deal_data), deal_id, deal_result
         ])
+
+
 
     messagebox.showinfo("Done", "Import completed.")
 
